@@ -19,6 +19,14 @@ pkill -f bbs.py
 ```
 sed -i 's/FSBC论坛/你的论坛名/g' bbs.py
 ```
+用telnet访问:
+```
+telnet 服务器IP或域名 端口(默认2323)
+```
+用nc访问:
+```
+nc 服务器IP或域名 端口(默认2323)
+```
 默认管理员用户:admin 密码:admin
 可以通过cpolar等内网穿透服务暴露到公网。
 欢迎提交Issues和PR！
