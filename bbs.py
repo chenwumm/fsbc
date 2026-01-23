@@ -641,14 +641,69 @@ def user_management_menu_enc(conn, user, encoding):
             add_report(user, target, reason)
             send_enc(conn, '举报已提交，管理员会处理！', encoding)
         elif cmd == '6' and is_admin(user):
-            # 查看举报列表
-            if not REPORTS:
-                send_enc(conn, '暂无举报', encoding)
-                continue
-            for idx, r in enumerate(REPORTS, 1):
-                send_enc(conn, f'{idx}. {r["reporter"]} 举报 {r["target"]} ({r["time"]})', encoding)
-                send_enc(conn, f'   理由：{r["reason"]}', encoding)
-            recvline_enc(conn, encoding, '输入任意键返回：')
+                # ===== 完整举报处理中心 =====
+                if not REPORTS:
+                    send_enc(conn, '\n暂无举报', encoding)
+                    continue
+                PAGE_REP = 5                # 每页条数
+                total_pg = (len(REPORTS) + PAGE_REP - 1) // PAGE_REP
+                cur_pg   = 1
+                while True:
+                    start = (cur_pg - 1) * PAGE_REP
+                    end   = start + PAGE_REP
+                    page_list = REPORTS[start:end]
+                    send_enc(conn, f'\n=== 举报处理中心 === 第{cur_pg}/{total_pg}页', encoding)
+                    for idx, r in enumerate(page_list, start + 1):
+                        send_enc(conn, f'{idx}. {r["reporter"]} → {r["target"]}  {r["time"]}', encoding)
+                        send_enc(conn, f'   理由：{r["reason"][:40]}{"..." if len(r["reason"]) > 40 else ""}', encoding)
+                        send_enc(conn, '-' * 40, encoding)
+                    send_enc(conn, '\n操作：序号处理  p上一页  n下一页  q返回', encoding)
+                    cmd2 = recvline_enc(conn, encoding, '请选择：').strip().lower()
+                    if cmd2 == 'q':
+                        break
+                    if cmd2 == 'p' and cur_pg > 1:
+                        cur_pg -= 1
+                        continue
+                    if cmd2 == 'n' and cur_pg < total_pg:
+                        cur_pg += 1
+                        continue
+                    if cmd2.isdigit():
+                        sel = int(cmd2) - 1
+                        if start <= sel < end:
+                            rep = page_list[sel]
+                            # 进入详情处理
+                            send_enc(conn, f'\n=== 举报详情 ===', encoding)
+                            send_enc(conn, f'举报者：{rep["reporter"]}', encoding)
+                            send_enc(conn, f'被举报者：{rep["target"]}', encoding)
+                            send_enc(conn, f'时间：{rep["time"]}', encoding)
+                            send_enc(conn, f'理由：\n{rep["reason"]}', encoding)
+                            send_enc(conn, '-' * 40, encoding)
+                            send_enc(conn, '1. 忽略  2. 封禁被举报者  3. 删除举报记录  0. 返回', encoding)
+                            c3 = recvline_enc(conn, encoding, '请选择：').strip()
+                            if c3 == '0':
+                                continue
+                            elif c3 == '1':
+                                send_enc(conn, '已忽略', encoding)
+                            elif c3 == '2':
+                                target = rep['target']
+                                if target in BANNED:
+                                    send_enc(conn, f'{target} 已是封禁状态', encoding)
+                                else:
+                                    BANNED.add(target)
+                                    save_banned()
+                                    # 踢出在线列表
+                                    if target in ONLINE_USERS:
+                                        remove_online_user(target)
+                                    send_enc(conn, f'{target} 已被封禁', encoding)
+                            elif c3 == '3':
+                                REPORTS.remove(rep)
+                                save_reports()
+                                send_enc(conn, '举报记录已删除', encoding)
+                                # 重新计算页数
+                                total_pg = (len(REPORTS) + PAGE_REP - 1) // PAGE_REP
+                                if cur_pg > total_pg and cur_pg > 1:
+                                    cur_pg -= 1
+                                break          # 跳出内层，刷新列表
         elif cmd == '7' and is_admin(user):
             # 封禁
             target = recvline_enc(conn, encoding, '要封禁的用户名：').strip()
