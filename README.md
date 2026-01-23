@@ -32,19 +32,19 @@ nc 你的服务器 2323
 ```bash
 git clone https://github.com/chenwumm/fsbc.git
 cd fsbc
-python bbs2.py &          # 默认监听 0.0.0.0:2323
+python bbs.py &          # 默认监听 0.0.0.0:2323
 ```
 
 2. 停止服务  
 
 ```bash
-pkill -f bbs2.py
+pkill -f bbs.py
 ```
 
 3. 自定义论坛名称（可选）  
 
 ```bash
-sed -i 's/FSBC论坛/你的论坛名/g' bbs2.py
+sed -i 's/FSBC论坛/你的论坛名/g' bbs.py
 ```
 
 4. 暴露到公网（可选）
