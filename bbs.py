@@ -880,16 +880,78 @@ def handle_client(conn, addr):
                     save_msgs()
                     send_enc(conn, '私信已发送', encoding)
                 if c == '2':
+                    # ===== 零预算版完整收信三层 =====
                     mine = [m for m in MSGS if m['receiver'] == user]
                     if not mine:
-                        send_enc(conn, '暂无私信', encoding)
+                        send_enc(conn, '\n暂无私信', encoding)
                         continue
-                    mine.reverse()
-                    for idx, m in enumerate(mine, 1):
-                        mark = '【未读】' if not m['is_read'] else ''
-                        send_enc(conn, f'{idx}. {mark}{m["sender"]} {m["time"]}', encoding)
-                        send_enc(conn, f'    {m["content"][:30]}...', encoding)
-                    recvline_enc(conn, encoding, '输入任意键返回：')
+                    mine.reverse()                 # 最新在前
+                    PAGE_MSG = 8                   # 每页条数
+                    total_pg = (len(mine) + PAGE_MSG - 1) // PAGE_MSG
+                    cur_pg   = 1
+                    while True:
+                        # 1. 列表页（带未读+分页）
+                        start = (cur_pg - 1) * PAGE_MSG
+                        end   = start + PAGE_MSG
+                        page_list = mine[start:end]
+                        send_enc(conn, f'\n=== 我的私信 === 第{cur_pg}/{total_pg}页', encoding)
+                        for idx, m in enumerate(page_list, start + 1):
+                            mark = '【未读】' if not m.get('is_read', False) else ''
+                            send_enc(conn, f'{idx}. {mark}{m["sender"]}  {m["time"]}', encoding)
+                            preview = m['content'].replace('\n', ' ')[:35]
+                            send_enc(conn, f'    {preview}...', encoding)
+                        send_enc(conn, '\n操作：序号看详情  p上一页  n下一页  q返回', encoding)
+                        cmd = recvline_enc(conn, encoding, '请选择：').strip().lower()
+                        if cmd == 'q':
+                            break
+                        if cmd == 'p' and cur_pg > 1:
+                            cur_pg -= 1
+                            continue
+                        if cmd == 'n' and cur_pg < total_pg:
+                            cur_pg += 1
+                            continue
+                        if cmd.isdigit():
+                            sel = int(cmd) - 1
+                            if start <= sel < end:          # 确保序号落在本页
+                                msg = mine[sel]
+                                # 2. 详情页 → 自动置已读
+                                msg['is_read'] = True
+                                save_msgs()
+                                send_enc(conn, f'\n=== 私信详情 ===', encoding)
+                                send_enc(conn, f'发信人：{msg["sender"]}  时间：{msg["time"]}', encoding)
+                                send_enc(conn, '-' * 40, encoding)
+                                send_enc(conn, msg['content'], encoding)
+                                send_enc(conn, '-' * 40, encoding)
+                                # 3. 详情内操作
+                                send_enc(conn, '操作：r 回复  d 删除  q 返回列表', encoding)
+                                inner = recvline_enc(conn, encoding, '请选择：').strip().lower()
+                                if inner == 'q':
+                                    continue
+                                if inner == 'r':
+                                    if is_banned(user):
+                                        send_enc(conn, '你已被封禁，无法回复！', encoding)
+                                        continue
+                                    rpl = recv_multiline_enc(conn, encoding, '回复内容（单行.结束）：')
+                                    MSGS.append({'sender': user,
+                                                 'receiver': msg['sender'],
+                                                 'content': rpl,
+                                                 'time': now(),
+                                                 'is_read': False})
+                                    save_msgs()
+                                    send_enc(conn, '回复已发送', encoding)
+                                if inner == 'd':
+                                    sure = recvline_enc(conn, encoding, '确认删除这封信？(y/n)：').lower()
+                                    if sure == 'y':
+                                        mine.pop(sel)           # 从列表移除
+                                        MSGS.remove(msg)        # 从全局移除
+                                        save_msgs()
+                                        send_enc(conn, '私信已删除', encoding)
+                                        # 重新计算总页数
+                                        total_pg = (len(mine) + PAGE_MSG - 1) // PAGE_MSG
+                                        if cur_pg > total_pg and cur_pg > 1:
+                                            cur_pg -= 1
+                                        break                   # 跳出内层，刷新列表
+
         elif cmd == '2':
             # 板块管理（仅管理员）
             if not is_admin(user):
