@@ -21,9 +21,9 @@ ONLINE_USERS = {}  # {用户名: {'conn': conn对象, 'addr': 地址, 'login_tim
 
 # 初始化文件
 DEFAULT_BOARDS = {
-    'Announce': {'desc': '站务公告', 'topics': []},
-    'General':  {'desc': '综合讨论', 'topics': []},
-    'Tech':     {'desc': '技术分享', 'topics': []}
+    'Announce': {'desc': '站务公告', 'topics': [], 'moderators': []},
+    'General':  {'desc': '综合讨论', 'topics': [], 'moderators': []},
+    'Tech':     {'desc': '技术分享', 'topics': [], 'moderators': []}
 }
 
 # 如果文件不存在则创建
@@ -44,7 +44,8 @@ REPORTS = json.load(open(REPORTS_F, encoding='utf-8'))
 BANNED  = set(json.load(open(BANNED_F, encoding='utf-8')))
 PROFILES = json.load(open(PROFILES_F, encoding='utf-8'))  # 新增：加载用户资料
 
-# 初始化默认资料
+# 为现有板块添加 moderators 字段（兼容旧数据）
+# 注：这个操作在 save_boards 定义后执行
 for username in USERS:
     if username not in PROFILES:
         PROFILES[username] = {
@@ -65,6 +66,12 @@ save_msgs    = lambda: json.dump(MSGS,   open(MSGS_F,    'w', encoding='utf-8'),
 save_reports = lambda: json.dump(REPORTS,open(REPORTS_F,'w', encoding='utf-8'), indent=2, ensure_ascii=False)
 save_banned  = lambda: json.dump(list(BANNED), open(BANNED_F,'w', encoding='utf-8'), indent=2)
 save_profiles = lambda: json.dump(PROFILES, open(PROFILES_F, 'w', encoding='utf-8'), indent=2, ensure_ascii=False)  # 新增
+
+# 为现有板块添加 moderators 字段（兼容旧数据）
+for board_name, board_data in BOARDS.items():
+    if 'moderators' not in board_data:
+        board_data['moderators'] = []
+save_boards()
 
 def now(): return datetime.datetime.now().strftime('%m-%d %H:%M')
 def now_full(): return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -116,6 +123,11 @@ def get_paginated_data(data_list, page):
 def role(user): return USERS[user]['role']
 def is_admin(user): return role(user) == 'admin'
 def is_mod(user): return role(user) in ('admin', 'moderator')
+def is_board_mod(user, board):
+    """检查用户是否是指定板块的版主"""
+    if is_admin(user):
+        return True
+    return user in BOARDS.get(board, {}).get('moderators', [])
 def is_normal(user): return role(user) == 'normal'
 def is_pending(user): return role(user) == 'pending'
 def is_banned(user): return user in BANNED
@@ -489,9 +501,9 @@ def show_thread_enc(conn, board, tid, user, encoding):
             send_enc(conn, f'{real_idx}. {r["author"]} ({r["time"]})：\n{r["content"]}', encoding)
             send_enc(conn, '-' * 30, encoding)
         base = 'r回复  d删帖  dr删回复  q返回列表'
-        mod_extra = '  t置顶帖  c取消置顶  tr置顶回复  ctr取消回复置顶'
+        mod_extra = '  t置顶帖  c取消置顶'
         extra = '  ru举报用户  v查看作者资料'
-        send_enc(conn, '\n操作：' + base + (mod_extra if is_mod(user) else '') + extra, encoding)
+        send_enc(conn, '\n操作：' + base + (mod_extra if is_board_mod(user, board) else '') + extra, encoding)
         cmd = recvline_enc(conn, encoding, '请选择：').lower()
         update_user_active(user)  # 更新活动时间
         
@@ -507,7 +519,7 @@ def show_thread_enc(conn, board, tid, user, encoding):
             update_post_count(user, 'reply')  # 更新回复计数
             send_enc(conn, '回复成功！', encoding)
         elif cmd == 'd':
-            if is_mod(user) or t['author'] == user:
+            if is_board_mod(user, board) or t['author'] == user:
                 sure = recvline_enc(conn, encoding, '确认删除整个帖子？(y/n)：').lower()
                 if sure == 'y':
                     del BOARDS[board]['topics'][tid]
@@ -523,7 +535,7 @@ def show_thread_enc(conn, board, tid, user, encoding):
             try:
                 ridx = int(recvline_enc(conn, encoding, '要删除的回复序号：')) - 1
                 if 0 <= ridx < len(replies):
-                    if is_mod(user) or replies[ridx]['author'] == user:
+                    if is_board_mod(user, board) or replies[ridx]['author'] == user:
                         del replies[ridx]
                         save_boards()
                         send_enc(conn, '回复已删', encoding)
@@ -531,7 +543,7 @@ def show_thread_enc(conn, board, tid, user, encoding):
                         send_enc(conn, '无权限', encoding)
             except:
                 send_enc(conn, '序号无效', encoding)
-        elif cmd in ['t', 'c'] and is_mod(user):
+        elif cmd in ['t', 'c'] and is_board_mod(user, board):
             if cmd == 't':
                 t['title'] = '[置顶]' + t['title'].replace('[置顶]', '')
                 BOARDS[board]['topics'].insert(0, BOARDS[board]['topics'].pop(tid))
@@ -766,23 +778,111 @@ def user_management_menu_enc(conn, user, encoding):
                 save_users()
                 send_enc(conn, '已拒绝并删除', encoding)
         elif cmd == '10' and is_admin(user):
-            # 设置/取消版主
-            target = recvline_enc(conn, encoding, '用户名：').strip()
-            if target not in USERS:
-                send_enc(conn, '用户不存在', encoding)
-                continue
-            if role(target) == 'moderator':
-                sure = recvline_enc(conn, encoding, f'取消 {target} 版主身份？(y/n)：').lower()
-                if sure == 'y':
-                    USERS[target]['role'] = 'normal'
-                    save_users()
-                    send_enc(conn, '已取消版主', encoding)
-            else:
-                sure = recvline_enc(conn, encoding, f'设 {target} 为版主？(y/n)：').lower()
-                if sure == 'y':
-                    USERS[target]['role'] = 'moderator'
-                    save_users()
-                    send_enc(conn, '已设为版主', encoding)
+            # 按板块分配版主
+            while True:
+                send_enc(conn, '\n=== 按板块分配版主 ===', encoding)
+                send_enc(conn, '1. 添加版主到板块', encoding)
+                send_enc(conn, '2. 移除板块版主', encoding)
+                send_enc(conn, '3. 查看各板块版主', encoding)
+                send_enc(conn, '0. 返回', encoding)
+                sub_cmd = recvline_enc(conn, encoding, '请选择：').strip()
+                
+                if sub_cmd == '0':
+                    break
+                elif sub_cmd == '1':
+                    # 添加版主到板块
+                    target = recvline_enc(conn, encoding, '要设为版主的用户名：').strip()
+                    if target not in USERS:
+                        send_enc(conn, '用户不存在', encoding)
+                        continue
+                    if is_admin(target):
+                        send_enc(conn, '管理员已经是所有板块的版主，无需设置', encoding)
+                        continue
+                    
+                    # 选择板块
+                    send_enc(conn, '\n选择板块：', encoding)
+                    board_list = list(BOARDS.keys())
+                    for idx, name in enumerate(board_list, 1):
+                        send_enc(conn, f'{idx}. {name} - {BOARDS[name]["desc"]}', encoding)
+                    try:
+                        board_idx = int(recvline_enc(conn, encoding, '板块序号（0返回）：')) - 1
+                        if board_idx == -1:
+                            continue
+                        board_name = board_list[board_idx]
+                    except:
+                        send_enc(conn, '序号无效', encoding)
+                        continue
+                    
+                    # 检查是否已经是该板块版主
+                    if target in BOARDS[board_name]['moderators']:
+                        send_enc(conn, f'{target} 已经是 {board_name} 的版主', encoding)
+                        continue
+                    
+                    sure = recvline_enc(conn, encoding, f'确认设 {target} 为 {board_name} 版主？(y/n)：').lower()
+                    if sure == 'y':
+                        BOARDS[board_name]['moderators'].append(target)
+                        # 同时设置用户角色为 moderator
+                        if USERS[target]['role'] == 'normal':
+                            USERS[target]['role'] = 'moderator'
+                        save_boards()
+                        save_users()
+                        send_enc(conn, f'已设置 {target} 为 {board_name} 版主', encoding)
+                        
+                elif sub_cmd == '2':
+                    # 移除板块版主
+                    send_enc(conn, '\n选择板块：', encoding)
+                    board_list = list(BOARDS.keys())
+                    for idx, name in enumerate(board_list, 1):
+                        mods = BOARDS[name]['moderators']
+                        mod_list = ', '.join(mods) if mods else '无'
+                        send_enc(conn, f'{idx}. {name} - 版主: {mod_list}', encoding)
+                    try:
+                        board_idx = int(recvline_enc(conn, encoding, '板块序号（0返回）：')) - 1
+                        if board_idx == -1:
+                            continue
+                        board_name = board_list[board_idx]
+                    except:
+                        send_enc(conn, '序号无效', encoding)
+                        continue
+                    
+                    if not BOARDS[board_name]['moderators']:
+                        send_enc(conn, f'{board_name} 暂无版主', encoding)
+                        continue
+                    
+                    # 显示该板块的版主列表
+                    send_enc(conn, f'\n{board_name} 的版主列表：', encoding)
+                    mods = BOARDS[board_name]['moderators']
+                    for idx, mod in enumerate(mods, 1):
+                        send_enc(conn, f'{idx}. {mod}', encoding)
+                    
+                    try:
+                        mod_idx = int(recvline_enc(conn, encoding, '要移除的版主序号（0返回）：')) - 1
+                        if mod_idx == -1:
+                            continue
+                        target_mod = mods[mod_idx]
+                    except:
+                        send_enc(conn, '序号无效', encoding)
+                        continue
+                    
+                    sure = recvline_enc(conn, encoding, f'确认移除 {target_mod} 在 {board_name} 的版主权限？(y/n)：').lower()
+                    if sure == 'y':
+                        BOARDS[board_name]['moderators'].remove(target_mod)
+                        # 检查用户是否在其他板块还是版主
+                        is_still_mod = any(target_mod in b['moderators'] for b in BOARDS.values())
+                        if not is_still_mod:
+                            USERS[target_mod]['role'] = 'normal'
+                        save_boards()
+                        save_users()
+                        send_enc(conn, f'已移除 {target_mod} 在 {board_name} 的版主权限', encoding)
+                        
+                elif sub_cmd == '3':
+                    # 查看各板块版主
+                    send_enc(conn, '\n=== 各板块版主列表 ===', encoding)
+                    for name, data in BOARDS.items():
+                        mods = data['moderators']
+                        mod_str = ', '.join(mods) if mods else '无'
+                        send_enc(conn, f'{name}: {mod_str}', encoding)
+                    recvline_enc(conn, encoding, '输入任意键返回：')
         elif cmd == '11' and is_admin(user):
             # 注销用户
             target = recvline_enc(conn, encoding, '要注销的用户名：').strip()
